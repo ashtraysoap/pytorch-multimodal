@@ -111,9 +111,9 @@ def train(train_feats,
     assert len(train_captions) == len(train_features)
 
     if val_caps:
-        val_captions = open(val_caps, mode='r') \
+        val_captions = open(val_caps, mode='r', encoding='utf-8') \
             .read().strip().split('\n')
-        val_src_captions = open(val_src_caps, mode='r') \
+        val_src_captions = open(val_src_caps, mode='r', encoding='utf-8') \
             .read().strip().split('\n')
 
         val_features = open(val_feats, mode='r').read().strip().split('\n')
