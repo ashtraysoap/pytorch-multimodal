@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from data_loader import DataLoader
-from prepro import normalize_strings, filter_inputs
+from prepro import normalize_strings, filter_inputs, unicode_to_ascii
 from vocab import Vocab
 
 import mmt
@@ -236,8 +236,8 @@ def train(train_feats,
         print()
         samples = sample(net, train_data, vocab_tgt, samples=3, max_len=max_seq_len)
         for t, s in samples:
-            print("Target:\t", t)
-            print("Predicted:\t", s)
+            print("Target:\t", unicode_to_ascii(t))
+            print("Predicted:\t", unicode_to_ascii(s))
             print()
 
         if val_caps:
@@ -245,8 +245,8 @@ def train(train_feats,
             print()
             samples = sample(net, val_data, vocab_tgt, samples=3, max_len=max_seq_len)
             for t, s in samples:
-                print("Target:\t", t)
-                print("Predicted:\t", s)
+                print("Target:\t", unicode_to_ascii(t))
+                print("Predicted:\t", unicode_to_ascii(s))
                 print()
 
         if val_caps:
