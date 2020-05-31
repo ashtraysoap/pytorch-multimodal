@@ -24,4 +24,5 @@ def normalize_string(s):
     s = s.replace('.', '').replace('!', '').replace('?', '') \
         .replace(',', '').replace('-', '').replace('"', '') \
             .replace("'", '')
+    s = ' '.join(s.split())
     return s

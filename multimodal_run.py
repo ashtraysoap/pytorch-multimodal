@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import pdb
 
 import fire
 import torch
@@ -10,20 +9,21 @@ import torch.nn as nn
 from data_loader import DataLoader
 from prepro import normalize_strings, filter_inputs, unicode_to_ascii
 from vocab import Vocab
-
+import attentions
 import mmt
 from mmt import MMTNetwork
 
 
 MAX_LEN = 15
-HIDDEN_DIM = 512
+HIDDEN_DIM = 1024
 EMB_DIM = 512
 ENC_SEQ_LEN = 14 * 14
 ENC_DIM = 512
 EPOCHS = 100
 BATCH_SIZE = 4
 CLIP_VAL = 1
-TEACHER_FORCE_RAT = 0.2
+TEACHER_FORCE_RAT = 0.
+TEACHER_FORCE_END = None
 WEIGHT_DECAY=0.0
 LEARNING_RATE=0.001
 
@@ -47,25 +47,47 @@ def run(train_feats,
     enc_dim=ENC_DIM,
     clip_val=CLIP_VAL,
     teacher_force=TEACHER_FORCE_RAT,
+    teacher_force_end=TEACHER_FORCE_END,
     dropout_p=0.1,
     attn_activation="relu",
     epsilon=0.0005,
     weight_decay=WEIGHT_DECAY,
     lr=LEARNING_RATE,
-    early_stopping=True,
+    early_stopping=False,
+    scheduler=None,
+    attention=1,
+    decoder=2,
+    deep_out=False,
     checkpoint="",
     out_dir="Pytorch_Exp_Out"):
 
-    # if decoder == 1:
-    #     decoder = models.AttentionDecoder
-    # elif decoder == 2:
-    #     decoder = models.AttentionDecoder_2
+    if decoder == 1:
+        decoder = mmt.AttentionDecoder_1
+    elif decoder == 2:
+        decoder = mmt.AttentionDecoder_2
+    elif decoder == 3:
+        decoder = mmt.AttentionDecoder_3
+    elif decoder == 4:
+        decoder = mmt.AttentionDecoder_4
 
-    train(train_feats, train_caps, val_feats, val_caps, train_src_caps, val_src_caps, train_prefix, 
-        val_prefix, epochs, batch_size, max_seq_len, hidden_dim, emb_dim,
-        enc_seq_len, enc_dim, clip_val,
-        teacher_force, dropout_p, attn_activation, epsilon, 
-        weight_decay, lr, early_stopping, checkpoint, out_dir)
+    if attention == 1:
+        attention = attentions.AdditiveAttention
+    elif attention == 2:
+        attention = attentions.GeneralAttention
+    elif attention == 3:
+        attention = attentions.ScaledGeneralAttention
+
+    train(train_feats=train_feats, train_caps=train_caps, val_feats=val_feats, 
+        val_caps=val_caps, train_src_caps=train_src_caps, val_src_caps=val_src_caps, 
+        train_prefix=train_prefix, 
+        val_prefix=val_prefix, epochs=epochs, batch_size=batch_size, max_seq_len=max_seq_len, 
+        hidden_dim=hidden_dim, emb_dim=emb_dim,
+        enc_seq_len=enc_seq_len, enc_dim=enc_dim, clip_val=clip_val,
+        teacher_force=teacher_force, teacher_force_end=teacher_force_end, dropout_p=dropout_p, 
+        attn_activation=attn_activation, epsilon=epsilon, 
+        weight_decay=weight_decay, lr=lr, early_stopping=early_stopping, 
+        scheduler=scheduler, attention=attention, deep_out=deep_out, decoder=decoder, 
+        checkpoint=checkpoint, out_dir=out_dir)
 
 
 def train(train_feats, 
@@ -85,12 +107,17 @@ def train(train_feats,
     enc_dim=ENC_DIM,
     clip_val=CLIP_VAL,
     teacher_force=TEACHER_FORCE_RAT,
+    teacher_force_end=0.,
     dropout_p=0.1,
     attn_activation="relu",
     epsilon=0.0005,
     weight_decay=WEIGHT_DECAY,
     lr=LEARNING_RATE,
     early_stopping=True,
+    scheduler="step",
+    attention=None,
+    deep_out=False,
+    decoder=None,
     checkpoint="",
     out_dir="Pytorch_Exp_Out"):
     
@@ -161,7 +188,8 @@ def train(train_feats,
         sos_token=0, eos_token=1, pad_token=2,
         teacher_forcing_rat=teacher_force,
         max_seq_len=max_seq_len,
-        dropout_p=dropout_p)
+        dropout_p=dropout_p, deep_out=deep_out,
+        attention=attention, decoder=decoder)
     net.to(DEVICE)
 
     if checkpoint:
@@ -169,6 +197,8 @@ def train(train_feats,
     
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=weight_decay)
     loss_function = nn.NLLLoss()
+
+    scheduler = set_scheduler(scheduler, optimizer)
 
     # 4. Train
 
@@ -197,11 +227,16 @@ def train(train_feats,
     for e in range(1, epochs + 1):
         print("Epoch ", e)
 
+        tfr = _teacher_force(epochs, e, teacher_force, teacher_force_end)
+
         # train one epoch
         train_l, inst, steps, t, l_log, pen = train_epoch(model=net, loss_function=loss_function,
             optimizer=optimizer, data_iter=train_data, max_len=max_seq_len, clip_val=clip_val,
-            epsilon=epsilon)
+            epsilon=epsilon, teacher_forcing_rat=tfr)
         
+        if scheduler is not None:
+            scheduler.step()
+
         # epoch logs
         print("Training loss:\t", train_l)
         print("Instances:\t", inst)
@@ -281,7 +316,7 @@ def train(train_feats,
     print("EXPERIMENT END ", time.asctime())
 
 def train_epoch(model, loss_function, optimizer, data_iter, max_len=MAX_LEN, 
-    clip_val=CLIP_VAL, epsilon=0.0005):
+    clip_val=CLIP_VAL, epsilon=0.0005, teacher_forcing_rat=None):
     """Trains the model for one epoch.
 
     Returns:
@@ -307,12 +342,13 @@ def train_epoch(model, loss_function, optimizer, data_iter, max_len=MAX_LEN,
         optimizer.zero_grad()
         y, att_weights = model(source_captions=src_caps,
             image_features=img_fts,
-            target_captions=tgt_caps)
+            target_captions=tgt_caps,
+            max_len=max_len,
+            teacher_forcing_rat=teacher_forcing_rat)
         
         y = y.permute(1, 2, 0)
         tgt_caps = tgt_caps.squeeze(2).permute(1, 0)
         
-        #loss = loss_function(input=y, target=targets)
         loss, penalty = loss_func(loss_function, y, tgt_caps, att_weights, epsilon)
         loss.backward()
 
@@ -349,12 +385,11 @@ def evaluate(model, loss_function, data_iter, max_len=MAX_LEN, epsilon=0.0005):
         for batch in data_iter:
             i, f, t, batch_size = batch
             i, f, t = i.to(DEVICE), f.to(DEVICE), t.to(DEVICE)
-            y, att_w = model(i, f, t, max_len=max_len)
+            y, att_w = model(i, f, None, max_len=max_len)
             y = y.permute(1, 2, 0)
             t = t.squeeze(2).permute(1, 0)
         
             l, _ = loss_func(loss_function, y, t, att_w, epsilon)
-            #l = loss_function(input=y, target=t).item()
 
             loss += l.item()
             loss_log.append(l.item() / batch_size)
@@ -453,6 +488,19 @@ def _write_loss_log(out_f, out_dir, log):
     with open(os.path.join(out_dir, out_f), mode='w') as f:
         for l in log:
             f.write("{0}\n".format(l))
+
+def _teacher_force(total_epochs, epoch, teacher_forcing_start, teacher_forcing_end):
+    if teacher_forcing_end == None:
+        return teacher_forcing_start
+    
+    d = (teacher_forcing_start - teacher_forcing_end) / float(total_epochs)
+    tfr = teacher_forcing_start - (d * epoch)
+    return tfr
+
+def set_scheduler(scheduler, optimizer):
+    if scheduler == "step":
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+    return None
 
 
 if __name__ == "__main__":
