@@ -22,8 +22,7 @@ ENC_DIM = 512
 EPOCHS = 100
 BATCH_SIZE = 4
 CLIP_VAL = 1
-TEACHER_FORCE_RAT = 0.
-TEACHER_FORCE_END = None
+TEACHER_FORCE_RAT = 1.0
 WEIGHT_DECAY=0.0
 LEARNING_RATE=0.001
 
@@ -47,7 +46,6 @@ def run(train_feats,
     enc_dim=ENC_DIM,
     clip_val=CLIP_VAL,
     teacher_force=TEACHER_FORCE_RAT,
-    teacher_force_end=TEACHER_FORCE_END,
     dropout_p=0.1,
     attn_activation="relu",
     epsilon=0.0005,
@@ -83,7 +81,7 @@ def run(train_feats,
         val_prefix=val_prefix, epochs=epochs, batch_size=batch_size, max_seq_len=max_seq_len, 
         hidden_dim=hidden_dim, emb_dim=emb_dim,
         enc_seq_len=enc_seq_len, enc_dim=enc_dim, clip_val=clip_val,
-        teacher_force=teacher_force, teacher_force_end=teacher_force_end, dropout_p=dropout_p, 
+        teacher_force=teacher_force, dropout_p=dropout_p, 
         attn_activation=attn_activation, epsilon=epsilon, 
         weight_decay=weight_decay, lr=lr, early_stopping=early_stopping, 
         scheduler=scheduler, attention=attention, deep_out=deep_out, decoder=decoder, 
@@ -107,7 +105,6 @@ def train(train_feats,
     enc_dim=ENC_DIM,
     clip_val=CLIP_VAL,
     teacher_force=TEACHER_FORCE_RAT,
-    teacher_force_end=0.,
     dropout_p=0.1,
     attn_activation="relu",
     epsilon=0.0005,
@@ -227,7 +224,7 @@ def train(train_feats,
     for e in range(1, epochs + 1):
         print("Epoch ", e)
 
-        tfr = _teacher_force(epochs, e, teacher_force, teacher_force_end)
+        tfr = _teacher_force(epochs, e, teacher_force)
 
         # train one epoch
         train_l, inst, steps, t, l_log, pen = train_epoch(model=net, loss_function=loss_function,
@@ -489,13 +486,8 @@ def _write_loss_log(out_f, out_dir, log):
         for l in log:
             f.write("{0}\n".format(l))
 
-def _teacher_force(total_epochs, epoch, teacher_forcing_start, teacher_forcing_end):
-    if teacher_forcing_end == None:
-        return teacher_forcing_start
-    
-    d = (teacher_forcing_start - teacher_forcing_end) / float(total_epochs)
-    tfr = teacher_forcing_start - (d * epoch)
-    return tfr
+def _teacher_force(total_epochs, epoch, teacher_forcing_start):
+    return teacher_forcing_start
 
 def set_scheduler(scheduler, optimizer):
     if scheduler == "step":

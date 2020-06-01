@@ -93,6 +93,7 @@ def run(test_dir,
 
         # run inference
         num_instances = len(srcs)
+
         i = 0
         captions = []
         while i < num_instances:
@@ -123,7 +124,7 @@ def run(test_dir,
 
             i += len(srcs_batch)
 
-    out_f = open(out, mode='w')
+    out_f = open(out, mode='w', encoding='utf-8')
     for c in captions:
         out_f.write(c + '\n')
 
