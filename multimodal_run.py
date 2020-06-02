@@ -12,10 +12,11 @@ from vocab import Vocab
 import attentions
 import mmt
 from mmt import MMTNetwork
+from bleu import compute_bleu
 
 
 MAX_LEN = 15
-HIDDEN_DIM = 1024
+HIDDEN_DIM = 512
 EMB_DIM = 512
 ENC_SEQ_LEN = 14 * 14
 ENC_DIM = 512
@@ -207,6 +208,8 @@ def train(train_feats,
     train_penalty_log = []
     val_loss_log = []
     val_loss_log_batches = []
+    prev_bleu = sys.maxsize
+    bleu_log = []
 
     train_data = DataLoader(captions_src=map(lambda x: x[2], train_data),
         captions_tgt=map(lambda x: x[0], train_data),
@@ -252,15 +255,17 @@ def train(train_feats,
 
         # evaluate
         if val_caps:
-            val_l, l_log = evaluate(model=net, loss_function=loss_function, 
+            val_l, l_log, bleu = evaluate(model=net, loss_function=loss_function, 
                 data_iter=val_data, max_len=max_seq_len, epsilon=epsilon)
 
             # validation logs
             print("Validation loss: ", val_l)
-            if val_l < prev_val_l:
+            print("Validation BLEU-4: ", bleu)
+            if bleu > prev_bleu:
                 torch.save(net.state_dict(), os.path.join(out_dir, 'net.pt'))
             val_loss_log.append(val_l)
             val_loss_log_batches += l_log
+            bleu_log.append(bleu)
 
 
         #sample model
@@ -284,11 +289,12 @@ def train(train_feats,
         if val_caps:
             # If the validation loss after this epoch increased from the
             # previous epoch, wrap training.
-            if prev_val_l < val_l and early_stopping:
+            if prev_bleu > bleu and early_stopping:
                 print("\nWrapping training after {0} epochs.\n".format(e + 1))
                 break
 
             prev_val_l = val_l
+            prev_bleu = bleu
 
 
 
@@ -309,6 +315,7 @@ def train(train_feats,
     if val_caps:
         _write_loss_log("val_loss_log.txt", out_dir, val_loss_log)
         _write_loss_log("val_loss_log_batches.txt", out_dir, val_loss_log_batches)
+        _write_loss_log("val_bleu4_log.txt", out_dir, bleu_log)
 
     print("EXPERIMENT END ", time.asctime())
 
@@ -375,6 +382,9 @@ def evaluate(model, loss_function, data_iter, max_len=MAX_LEN, epsilon=0.0005):
     loss_log = []
     num_instances = 0
 
+    captions = []
+    references = []
+
     with torch.no_grad():
         # set the network to evaluation mode
         model.eval()
@@ -392,7 +402,18 @@ def evaluate(model, loss_function, data_iter, max_len=MAX_LEN, epsilon=0.0005):
             loss_log.append(l.item() / batch_size)
             num_instances += batch_size
 
-    return (loss / num_instances), loss_log
+            # decode
+            y = y.permute(0, 2, 1)
+            _, topi = y.topk(1, dim=2)
+            topi = topi.detach().squeeze(2)
+            t = t.detach()
+
+            for j in range(batch_size):
+                captions.append(data_iter.vocab_tgt.tensor_to_sentence(topi[j]))
+                references.append([data_iter.vocab_tgt.tensor_to_sentence(t[j])])
+
+    bleu = compute_bleu(reference_corpus=references, translation_corpus=captions)[0]
+    return (loss / num_instances), loss_log, bleu
 
 def sample(model, data_iter, vocab, samples=1, max_len=MAX_LEN, shuffle=True):
     """Samples from the model.
